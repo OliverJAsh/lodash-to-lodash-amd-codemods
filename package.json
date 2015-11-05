@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "dependencies": {
+    "jscodeshift": "^0.3.8",
+    "lodash": "^3.10.1"
+  }
+}
