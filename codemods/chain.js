@@ -66,10 +66,6 @@ module.exports = function (file, api) {
 
     const isChain = name => name === 'chain' || name === '_';
 
-    const oldDependencyName = 'common/utils/_';
-    const newDependencyNamePrefix = 'lodash/';
-    const oldParamName = '_';
-
     const { lodashModuleMap, lodashAliasesMap } = lodashMaps;
     const getDirectProperty = (object, key) => {
         if (object.hasOwnProperty(key)) {
@@ -85,7 +81,7 @@ module.exports = function (file, api) {
             return 'common/utils/chain';
         } else {
             const match = normalizeLodashModule(name);
-            return match && (newDependencyNamePrefix + match);
+            return match && ('lodash/' + match);
         }
     };
     const normalizeModuleName = name => normalizeModulePath(name).split('/').pop();
@@ -144,37 +140,41 @@ module.exports = function (file, api) {
         });
     };
 
-    const updateModuleDefinition = function (defineAst, lodashModuleNames) {
+    const updateModuleDefinition = function (defineAst, modulesNames) {
         // Update Lodash references
         defineAst
             .replaceWith(defineCallExpressionPath => {
                 const firstArg = defineCallExpressionPath.node.arguments[0];
                 const hasDepsArray = firstArg.type === 'ArrayExpression';
-                const depsArray = hasDepsArray ? firstArg : [];
 
-                // New define deps and params: replace the old Lodash reference with
-                // the new Lodash modules
-                const deps = hasDepsArray && unique(
-                    depsArray.elements
-                        .map(literal => literal.value)
-                        .filter(value => value !== oldDependencyName)
-                        .concat(lodashModuleNames.map(normalizeModulePath))
-                ).map(s => j.literal(s));
+                if (hasDepsArray && modulesNames.length) {
+                    // Add new deps
+                    const depsArray = hasDepsArray ? firstArg : [];
 
-                const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
-                const oldParams = moduleDefinition.params;
-                const params = unique(
-                    oldParams
-                        .map(identifier => identifier.name)
-                        .filter(name => name !== oldParamName)
-                        .concat(lodashModuleNames.map(normalizeModuleName))
-                ).map(s => j.identifier(s));
+                    // New define deps and params: replace the old Lodash reference with
+                    // the new Lodash modules
+                    const deps = hasDepsArray && unique(
+                        depsArray.elements
+                            .map(literal => literal.value)
+                            .concat(modulesNames.map(normalizeModulePath))
+                    ).map(s => j.literal(s));
 
-                return j.callExpression(j.identifier('define'), [
-                    hasDepsArray && j.arrayExpression(deps),
-                    // If there is no ID, use an empty identifier to create spacing
-                    j.functionExpression(moduleDefinition.id || j.identifier(''), params, moduleDefinition.body)
-                ].filter(identity));
+                    const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
+                    const oldParams = moduleDefinition.params;
+                    const params = unique(
+                        oldParams
+                            .map(identifier => identifier.name)
+                            .concat(modulesNames.map(normalizeModuleName))
+                    ).map(s => j.identifier(s));
+
+                    return j.callExpression(j.identifier('define'), [
+                        hasDepsArray && j.arrayExpression(deps),
+                        // If there is no ID, use an empty identifier to create spacing
+                        j.functionExpression(moduleDefinition.id || j.identifier(''), params, moduleDefinition.body)
+                    ].filter(identity));
+                } else {
+                    return defineCallExpressionPath.node;
+                }
             });
     };
 
@@ -212,29 +212,24 @@ module.exports = function (file, api) {
         const isNonChainableLodashMethod = name => contains(nonChainableLodashMethods, name);
         const isMaybeNonChainableLodashMethod = name => contains(maybeNonChainableLodashMethods, name);
 
-        // Update the module definition if there's any potential module names. This
-        // will mean we add chain even if it turns out there are no Lodash methods
-        // on the chain i.e. `_.chain().join(',')`.
-        if (potentialLodashModuleNames.length) {
-            potentialLodashModuleNames.forEach(fnName => {
-                if (!isLodashModule(fnName) && !isChainMethod(fnName) && !isChain(fnName)) {
-                    console.log(file.path, 'Warning: no Lodash function or chain method for:', fnName);
-                }
+        potentialLodashModuleNames.forEach(fnName => {
+            if (!isLodashModule(fnName) && !isChainMethod(fnName) && !isChain(fnName)) {
+                console.log(file.path, 'Warning: no Lodash function or chain method for:', fnName);
+            }
 
-                if (isNonChainableLodashMethod(fnName)) {
-                    console.log(file.path, 'Warning: non chainable Lodash method:', fnName);
-                }
+            if (isNonChainableLodashMethod(fnName)) {
+                console.log(file.path, 'Warning: non chainable Lodash method:', fnName);
+            }
 
-                if (isMaybeNonChainableLodashMethod(fnName)) {
-                    console.log(file.path, 'Warning: maybe non chainable Lodash method:', fnName);
-                }
-            });
+            if (isMaybeNonChainableLodashMethod(fnName)) {
+                console.log(file.path, 'Warning: maybe non chainable Lodash method:', fnName);
+            }
+        });
 
-            const lodashModuleNames = potentialLodashModuleNames
-                .filter(fnName => isLodashModule(fnName) || isChain(fnName));
-            // console.log(file.path, 'Lodash module names:', lodashModuleNames);
-            updateModuleDefinition(defineAst, lodashModuleNames);
-        }
+        const moduleNames = potentialLodashModuleNames
+            .filter(fnName => isLodashModule(fnName) || isChain(fnName));
+        // console.log(file.path, 'Lodash module names:', lodashModuleNames);
+        updateModuleDefinition(defineAst, moduleNames);
     });
 
     // https://github.com/benjamn/recast/blob/52a7ec3eaaa37e78436841ed8afc948033a86252/lib/options.js#L61

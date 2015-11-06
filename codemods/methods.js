@@ -13,10 +13,6 @@ module.exports = function (file, api) {
         return acc;
     }, []);
 
-    const oldDependencyName = 'common/utils/_';
-    const newDependencyNamePrefix = 'lodash/';
-    const oldParamName = '_';
-
     const { lodashModuleMap, lodashAliasesMap } = lodashMaps;
     const getDirectProperty = (object, key) => {
         if (object.hasOwnProperty(key)) {
@@ -28,40 +24,44 @@ module.exports = function (file, api) {
         return getDirectProperty(lodashModuleMap, canonicalModuleName);
     }
     const normalizeModulePath = name =>
-        newDependencyNamePrefix + normalizeLodashMethod(name);
+        'lodash/' + normalizeLodashMethod(name);
     const normalizeModuleName = name => normalizeModulePath(name).split('/').pop();
 
-    const updateModuleDefinition = function (defineAst, lodashModuleNames) {
+    const updateModuleDefinition = function (defineAst, modulesNames) {
         // Update Lodash references
         defineAst
             .replaceWith(defineCallExpressionPath => {
                 const firstArg = defineCallExpressionPath.node.arguments[0];
                 const hasDepsArray = firstArg.type === 'ArrayExpression';
-                const depsArray = hasDepsArray ? firstArg : [];
 
-                // New define deps and params: replace the old Lodash reference with
-                // the new Lodash modules
-                const deps = hasDepsArray && unique(
-                    depsArray.elements
-                        .map(literal => literal.value)
-                        .filter(value => value !== oldDependencyName)
-                        .concat(lodashModuleNames.map(normalizeModulePath))
-                ).map(s => j.literal(s));
+                if (hasDepsArray && modulesNames.length) {
+                    // Add new deps
+                    const depsArray = hasDepsArray ? firstArg : [];
 
-                const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
-                const oldParams = moduleDefinition.params;
-                const params = unique(
-                    oldParams
-                        .map(identifier => identifier.name)
-                        .filter(name => name !== oldParamName)
-                        .concat(lodashModuleNames.map(normalizeModuleName))
-                ).map(s => j.identifier(s));
+                    // New define deps and params: replace the old Lodash reference with
+                    // the new Lodash modules
+                    const deps = hasDepsArray && unique(
+                        depsArray.elements
+                            .map(literal => literal.value)
+                            .concat(modulesNames.map(normalizeModulePath))
+                    ).map(s => j.literal(s));
 
-                return j.callExpression(j.identifier('define'), [
-                    hasDepsArray && j.arrayExpression(deps),
-                    // If there is no ID, use an empty identifier to create spacing
-                    j.functionExpression(moduleDefinition.id || j.identifier(''), params, moduleDefinition.body)
-                ].filter(identity));
+                    const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
+                    const oldParams = moduleDefinition.params;
+                    const params = unique(
+                        oldParams
+                            .map(identifier => identifier.name)
+                            .concat(modulesNames.map(normalizeModuleName))
+                    ).map(s => j.identifier(s));
+
+                    return j.callExpression(j.identifier('define'), [
+                        hasDepsArray && j.arrayExpression(deps),
+                        // If there is no ID, use an empty identifier to create spacing
+                        j.functionExpression(moduleDefinition.id || j.identifier(''), params, moduleDefinition.body)
+                    ].filter(identity));
+                } else {
+                    return defineCallExpressionPath.node;
+                }
             });
     };
 
@@ -84,14 +84,12 @@ module.exports = function (file, api) {
                 .map(p => p.property.name)
         );
 
-        if (lodashModuleNames.length) {
-            updateModuleDefinition(defineAst, lodashModuleNames);
+        updateModuleDefinition(defineAst, lodashModuleNames);
 
-            // Update Lodash usages
-            // We normalize the name for consistency
-            lodashCalls
-                .replaceWith(memberExpression => j.identifier(normalizeModuleName(memberExpression.value.property.name)));
-        }
+        // Update Lodash usages
+        // We normalize the name for consistency
+        lodashCalls
+            .replaceWith(memberExpression => j.identifier(normalizeModuleName(memberExpression.value.property.name)));
     });
 
 
