@@ -39,7 +39,9 @@ module.exports = function (file, api) {
         }
         return acc;
     }, []);
-
+    const mapObject = (object, mapFn) =>
+        Object.keys(object).map(key => mapFn(object[key], key));
+    const values = object => mapObject(object, value => value);
 
     const getDeepestCallExpression = callExpression => {
         const traverse = currentCallExpression => {
@@ -72,20 +74,17 @@ module.exports = function (file, api) {
             return object[key];
         }
     };
-    const normalizeLodashModule = name => {
-        const canonicalModuleName = getDirectProperty(lodashAliasesMap, name) || name;
-        return getDirectProperty(lodashModuleMap, canonicalModuleName);
-    }
-    const normalizeModulePath = name => {
-        if (isChain(name)) {
-            return 'common/utils/chain';
-        } else {
-            const match = normalizeLodashModule(name);
-            return match && ('lodash/' + match);
+
+    const getLodashModulePath = moduleName =>
+        'lodash/' + getDirectProperty(lodashModuleMap, moduleName);
+    const normalizeLodashModuleName = name => {
+        const canonicalName = getDirectProperty(lodashAliasesMap, name) || name;
+        if (getLodashModulePath(name)) {
+            return canonicalName;
         }
     };
-    const normalizeModuleName = name => normalizeModulePath(name).split('/').pop();
-    const isLodashModule = name => !!normalizeLodashModule(name);
+
+    const isLodashModule = name => !!normalizeLodashModuleName(name);
     const isChainMethod = name => contains([
         'value',
         'valueOf',
@@ -125,7 +124,7 @@ module.exports = function (file, api) {
                             callee.object,
                             j.identifier('and')
                         ),
-                        [j.identifier(normalizeModuleName(fnName))].concat(args)
+                        [j.identifier(normalizeLodashModuleName(fnName))].concat(args)
                     );
                 } else {
                     return j.callExpression(
@@ -140,14 +139,14 @@ module.exports = function (file, api) {
         });
     };
 
-    const updateModuleDefinition = function (defineAst, modulesNames) {
+    const updateModuleDefinition = function (defineAst, modules) {
         // Update Lodash references
         defineAst
             .replaceWith(defineCallExpressionPath => {
                 const firstArg = defineCallExpressionPath.node.arguments[0];
                 const hasDepsArray = firstArg.type === 'ArrayExpression';
 
-                if (hasDepsArray && modulesNames.length) {
+                if (hasDepsArray) {
                     // Add new deps
                     const depsArray = hasDepsArray ? firstArg : [];
 
@@ -156,7 +155,7 @@ module.exports = function (file, api) {
                     const deps = hasDepsArray && unique(
                         depsArray.elements
                             .map(literal => literal.value)
-                            .concat(modulesNames.map(normalizeModulePath))
+                            .concat(values(modules))
                     ).map(s => j.literal(s));
 
                     const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
@@ -164,7 +163,7 @@ module.exports = function (file, api) {
                     const params = unique(
                         oldParams
                             .map(identifier => identifier.name)
-                            .concat(modulesNames.map(normalizeModuleName))
+                            .concat(Object.keys(modules))
                     ).map(s => j.identifier(s));
 
                     return j.callExpression(j.identifier('define'), [
@@ -226,8 +225,21 @@ module.exports = function (file, api) {
             }
         });
 
-        const moduleNames = potentialLodashModuleNames
-            .filter(fnName => isLodashModule(fnName) || isChain(fnName));
+        const modulesToModuleMap = modules =>
+            modules.reduce((map, moduleName) => {
+                const canonicalModuleName = normalizeLodashModuleName(moduleName);
+                if (isChain(moduleName)) {
+                    map[moduleName] = 'common/utils/chain';
+                } else {
+                    map[canonicalModuleName] = getLodashModulePath(canonicalModuleName);
+                }
+                return map;
+            }, {});
+        const moduleNames = modulesToModuleMap(
+            potentialLodashModuleNames
+                .filter(fnName => isLodashModule(fnName) || isChain(fnName))
+        );
+
         // console.log(file.path, 'Lodash module names:', lodashModuleNames);
         updateModuleDefinition(defineAst, moduleNames);
     });

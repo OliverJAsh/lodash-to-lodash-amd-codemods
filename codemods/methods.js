@@ -12,6 +12,9 @@ module.exports = function (file, api) {
         }
         return acc;
     }, []);
+    const mapObject = (object, mapFn) =>
+        Object.keys(object).map(key => mapFn(object[key], key));
+    const values = object => mapObject(object, value => value);
 
     const { lodashModuleMap, lodashAliasesMap } = lodashMaps;
     const getDirectProperty = (object, key) => {
@@ -19,22 +22,23 @@ module.exports = function (file, api) {
             return object[key];
         }
     };
-    const normalizeLodashMethod = name => {
-        const canonicalModuleName = getDirectProperty(lodashAliasesMap, name) || name;
-        return getDirectProperty(lodashModuleMap, canonicalModuleName);
-    }
-    const normalizeModulePath = name =>
-        'lodash/' + normalizeLodashMethod(name);
-    const normalizeModuleName = name => normalizeModulePath(name).split('/').pop();
+    const getLodashModulePath = moduleName =>
+        'lodash/' + getDirectProperty(lodashModuleMap, moduleName);
+    const normalizeLodashModuleName = name => {
+        const canonicalName = getDirectProperty(lodashAliasesMap, name) || name;
+        if (getLodashModulePath(name)) {
+            return canonicalName;
+        }
+    };
 
-    const updateModuleDefinition = function (defineAst, modulesNames) {
+    const updateModuleDefinition = function (defineAst, modules) {
         // Update Lodash references
         defineAst
             .replaceWith(defineCallExpressionPath => {
                 const firstArg = defineCallExpressionPath.node.arguments[0];
                 const hasDepsArray = firstArg.type === 'ArrayExpression';
 
-                if (hasDepsArray && modulesNames.length) {
+                if (hasDepsArray) {
                     // Add new deps
                     const depsArray = hasDepsArray ? firstArg : [];
 
@@ -43,7 +47,7 @@ module.exports = function (file, api) {
                     const deps = hasDepsArray && unique(
                         depsArray.elements
                             .map(literal => literal.value)
-                            .concat(modulesNames.map(normalizeModulePath))
+                            .concat(values(modules))
                     ).map(s => j.literal(s));
 
                     const moduleDefinition = defineCallExpressionPath.node.arguments[hasDepsArray ? 1 : 0];
@@ -51,7 +55,7 @@ module.exports = function (file, api) {
                     const params = unique(
                         oldParams
                             .map(identifier => identifier.name)
-                            .concat(modulesNames.map(normalizeModuleName))
+                            .concat(Object.keys(modules))
                     ).map(s => j.identifier(s));
 
                     return j.callExpression(j.identifier('define'), [
@@ -78,18 +82,24 @@ module.exports = function (file, api) {
             // Chain is handled by a separate codemod
             .filter(nodePath => nodePath.node.property.name !== 'chain');
 
-        const lodashModuleNames = unique(
+        const modulesToModuleMap = modules =>
+            modules.reduce((map, moduleName) => {
+                const canonicalModuleName = normalizeLodashModuleName(moduleName);
+                map[canonicalModuleName] = getLodashModulePath(canonicalModuleName);
+                return map;
+            }, {});
+        const lodashModules = modulesToModuleMap(unique(
             lodashCalls
                 .nodes()
                 .map(p => p.property.name)
-        );
+        ));
 
-        updateModuleDefinition(defineAst, lodashModuleNames);
+        updateModuleDefinition(defineAst, lodashModules);
 
         // Update Lodash usages
         // We normalize the name for consistency
         lodashCalls
-            .replaceWith(memberExpression => j.identifier(normalizeModuleName(memberExpression.value.property.name)));
+            .replaceWith(memberExpression => j.identifier(normalizeLodashModuleName(memberExpression.value.property.name)));
     });
 
 
