@@ -29,6 +29,8 @@ define([
 
   _.chain([]).join(',');
 
+  _.chain([]).chain().each();
+
   _.chain([]).each();
 
   _.chain([])
